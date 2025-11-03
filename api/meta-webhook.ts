@@ -1,8 +1,15 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const PAGE_TOKEN   = process.env.PAGE_ACCESS_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
+
+// Initialize Redis
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
 function first(v: unknown): string | undefined {
   if (typeof v === 'string') return v;
@@ -17,15 +24,6 @@ async function graphGET<T = any>(path: string, params: Record<string, string> = 
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   const r = await fetch(url.toString());
   if (!r.ok) throw new Error(`Graph GET ${path} failed ${r.status}: ${await r.text()}`);
-  return (await r.json()) as T;
-}
-
-async function graphPOST<T = any>(path: string, body: Record<string, string>) {
-  if (!PAGE_TOKEN) throw new Error('PAGE_ACCESS_TOKEN missing');
-  const url = new URL(`https://graph.facebook.com/v24.0/${path}`);
-  const form = new URLSearchParams({ access_token: PAGE_TOKEN, ...body });
-  const r = await fetch(url.toString(), { method: 'POST', body: form });
-  if (!r.ok) throw new Error(`Graph POST ${path} failed ${r.status}: ${await r.text()}`);
   return (await r.json()) as T;
 }
 
@@ -116,12 +114,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const commentId = change.value?.comment_id as string | undefined;
           console.log('📩 Mention event:', { mediaId, commentId });
 
-          // Context
+          // Fetch context
           let media: any = null;
           if (mediaId) {
             try {
               console.log('🔍 Fetching media details...');
-              media = await graphGET(mediaId, { fields: 'id,username,permalink,caption,media_type' });
+              media = await graphGET(mediaId, { fields: 'id,username,permalink,caption,media_type,media_url' });
               console.log('✅ Media fetched:', media);
             } catch (e) { 
               console.warn('❌ Media fetch failed:', e); 
@@ -141,28 +139,49 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           console.log('🧠 Full context:', { media, comment });
 
-          // Auto-reply ONLY if the media is yours
+          // Check if this is our media
           const isOurMedia = media?.username && IG_USERNAME && media.username.toLowerCase() === IG_USERNAME;
-          console.log('🎯 Reply check:', {
+          console.log('🎯 Media check:', {
             mediaUsername: media?.username,
             ourUsername: IG_USERNAME,
             isMatch: isOurMedia,
             hasCommentId: Boolean(commentId),
           });
 
-          if (isOurMedia && commentId) {
+          if (isOurMedia && commentId && media && comment) {
             try {
-              console.log('💬 Attempting to reply...');
-              await graphPOST(`${mediaId}/comments`, {
-                message: `Thanks for the mention, @${comment?.username || ''}! 🙌`,
-                parent_comment_id: commentId,
-              });
-              console.log('✅ Successfully replied to comment', commentId);
+              // Push to Redis queue
+              const job = {
+                id: `${commentId}_${Date.now()}`,
+                mediaId,
+                commentId,
+                media: {
+                  permalink: media.permalink,
+                  caption: media.caption || '',
+                  username: media.username,
+                  mediaType: media.media_type,
+                  mediaUrl: media.media_url || media.permalink,
+                },
+                comment: {
+                  text: comment.text,
+                  username: comment.username,
+                  timestamp: comment.timestamp,
+                },
+                status: 'pending',
+                createdAt: new Date().toISOString(),
+              };
+
+              console.log('📤 Pushing to Redis queue:', job.id);
+              
+              // Push to list (queue)
+              await redis.lpush('instagram:mentions', JSON.stringify(job));
+              
+              console.log('✅ Successfully pushed to Redis queue');
             } catch (e) { 
-              console.warn('❌ Reply failed:', e); 
+              console.error('❌ Redis push failed:', e); 
             }
           } else {
-            console.log('ℹ️  Mention not on our media; logging only.');
+            console.log('ℹ️  Mention not on our media or missing data; skipping.');
           }
         }
       }
