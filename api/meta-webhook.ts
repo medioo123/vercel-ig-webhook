@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -35,57 +34,63 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ACK immediately
     res.status(200).json({ status: 'ok' });
     
-    try {
-      // Initialize Redis with retry DISABLED
-      console.log('🔧 Creating Redis client...');
-      const redis = new Redis({
-        url: process.env.UPSTASH_REDIS_REST_URL!,
-        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-        retry: {
-          retries: 0,
-        },
-      });
-      console.log('✅ Redis client created');
+    const payload = req.body as any;
+    
+    for (const entry of payload?.entry ?? []) {
+      for (const change of entry?.changes ?? []) {
+        if (change.field !== 'mentions') continue;
 
-      const payload = req.body as any;
-      
-      for (const entry of payload?.entry ?? []) {
-        for (const change of entry?.changes ?? []) {
-          if (change.field !== 'mentions') continue;
+        const mediaId = change.value?.media_id;
+        const commentId = change.value?.comment_id;
+        
+        if (!mediaId || !commentId) continue;
 
-          const mediaId = change.value?.media_id;
-          const commentId = change.value?.comment_id;
+        const job = {
+          id: `${commentId}_${Date.now()}`,
+          mediaId,
+          commentId,
+          username: IG_USERNAME,
+          status: 'pending',
+          createdAt: new Date().toISOString(),
+        };
+
+        console.log('📤 Pushing:', job.id);
+        
+        try {
+          // Use pure fetch - no SDK
+          const upstashUrl = process.env.UPSTASH_REDIS_REST_URL!;
+          const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN!;
           
-          if (!mediaId || !commentId) continue;
-
-          const job = {
-            id: `${commentId}_${Date.now()}`,
-            mediaId,
-            commentId,
-            username: IG_USERNAME,
-            status: 'pending',
-            createdAt: new Date().toISOString(),
-          };
-
-          console.log('📤 Pushing:', job.id);
-          console.log('📦 Job data:', JSON.stringify(job));
+          console.log('🌐 Calling Upstash REST API...');
           
-          try {
-            console.log('⏳ Calling lpush...');
-            const result = await redis.lpush('instagram:mentions', JSON.stringify(job));
-            console.log('✅ LPUSH SUCCESS! Result:', result);
-          } catch (lpushErr: any) {
-            console.error('❌ LPUSH ERROR:', lpushErr.message);
-            console.error('Error details:', JSON.stringify(lpushErr, Object.getOwnPropertyNames(lpushErr)));
+          // Upstash REST API: POST https://xxx.upstash.io/lpush/key
+          // Body: JSON array of values to push
+          const response = await fetch(`${upstashUrl}/lpush/instagram:mentions`, {
+            method: 'POST',
+            headers: {
+              'Authorization': `Bearer ${upstashToken}`,
+            },
+            body: JSON.stringify([JSON.stringify(job)]),
+          });
+          
+          console.log('📡 Response status:', response.status);
+          
+          if (!response.ok) {
+            const errorText = await response.text();
+            console.error('❌ API Error:', errorText);
+            throw new Error(`Upstash failed: ${response.status}`);
           }
+          
+          const result = await response.json();
+          console.log('✅ SUCCESS! Result:', result);
+        } catch (err: any) {
+          console.error('❌ Error:', err.message);
+          console.error('Stack:', err.stack);
         }
       }
-      
-      console.log('🏁 All done!');
-    } catch (e: any) {
-      console.error('❌ OUTER ERROR:', e.message);
-      console.error('Error stack:', e.stack);
     }
+    
+    console.log('🏁 Done!');
     return;
   }
 

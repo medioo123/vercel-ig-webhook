@@ -19,7 +19,6 @@
   },
   "homepage": "https://github.com/medioo123/vercel-ig-webhook#readme",
   "dependencies": {
-    "@upstash/redis": "^1.35.6",
     "@vercel/node": "^5.5.3",
     "dotenv": "^17.2.3"
   }
