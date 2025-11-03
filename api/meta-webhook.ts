@@ -4,7 +4,10 @@ import { Redis } from '@upstash/redis';
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
 
-// Initialize Redis
+// Initialize Redis with extra logging
+console.log('🔧 Initializing Redis with URL:', process.env.UPSTASH_REDIS_REST_URL ? 'present' : 'MISSING');
+console.log('🔧 Redis token:', process.env.UPSTASH_REDIS_REST_TOKEN ? 'present' : 'MISSING');
+
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
@@ -96,19 +99,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             };
 
             console.log('📤 Pushing to Redis queue:', job.id);
+            console.log('📦 Job data:', JSON.stringify(job));
             
             // Push to list (queue)
-            await redis.lpush('instagram:mentions', JSON.stringify(job));
+            const result = await redis.lpush('instagram:mentions', JSON.stringify(job));
             
-            console.log('✅ Successfully pushed to Redis queue');
-          } catch (e) { 
-            console.error('❌ Redis push failed:', e); 
+            console.log('✅ Successfully pushed to Redis queue!');
+            console.log('✅ Redis returned:', result);
+          } catch (redisError: any) { 
+            console.error('❌ Redis push failed with error:', redisError);
+            console.error('❌ Error message:', redisError?.message);
+            console.error('❌ Error stack:', redisError?.stack);
+            console.error('❌ Full error:', JSON.stringify(redisError, null, 2));
           }
         }
       }
+      
+      console.log('🏁 Finished processing all entries');
     } catch (e: any) {
       console.error('❌ Webhook error:', e?.message || e);
-      console.error('Stack:', e?.stack);
+      console.error('❌ Stack:', e?.stack);
+      console.error('❌ Full error:', JSON.stringify(e, null, 2));
     }
     return;
   }
