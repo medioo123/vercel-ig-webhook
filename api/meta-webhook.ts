@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -10,8 +9,37 @@ function first(v: unknown): string | undefined {
   return undefined;
 }
 
+async function pushToRedis(job: any): Promise<void> {
+  const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL!;
+  const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
+  
+  // Upstash REST API: POST to /lpush/{key} with JSON body
+  const url = `${UPSTASH_URL}/lpush/instagram:mentions`;
+  
+  console.log('🌐 Calling Upstash API:', url);
+  
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${UPSTASH_TOKEN}`,
+    },
+    body: JSON.stringify([JSON.stringify(job)]), // Array of values to push
+  });
+  
+  console.log('📡 Response status:', response.status);
+  
+  if (!response.ok) {
+    const text = await response.text();
+    console.error('❌ Response error:', text);
+    throw new Error(`Upstash API failed: ${response.status} - ${text}`);
+  }
+  
+  const result = await response.json();
+  console.log('✅ Upstash response:', result);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  console.log('🚀 WEBHOOK HIT:', { method: req.method, url: req.url });
+  console.log('🚀 WEBHOOK HIT:', { method: req.method });
 
   if (req.method === 'OPTIONS') return res.status(200).end();
 
@@ -31,44 +59,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // EVENTS (POST)
   if (req.method === 'POST') {
     console.log('📨 POST event received');
-    
-    // LOG THE FULL PAYLOAD FROM META
-    console.log('📦 Full Meta payload:', JSON.stringify(req.body, null, 2));
+    console.log('📦 Payload:', JSON.stringify(req.body, null, 2));
     
     // ACK immediately
     res.status(200).json({ status: 'ok' });
     
     try {
-      // Initialize Redis INSIDE handler (same as local test)
-      console.log('🔧 Initializing Redis client...');
-      const redis = new Redis({
-        url: process.env.UPSTASH_REDIS_REST_URL!,
-        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-      });
-      console.log('✅ Redis client created');
-
       const payload = req.body as any;
       
       for (const entry of payload?.entry ?? []) {
-        console.log('📝 Processing entry:', entry);
-        
         for (const change of entry?.changes ?? []) {
-          console.log('🔔 Processing change:', change);
-          
-          if (change.field !== 'mentions') {
-            console.log('⏭️  Skipping field:', change.field);
-            continue;
-          }
+          if (change.field !== 'mentions') continue;
 
           const mediaId = change.value?.media_id;
           const commentId = change.value?.comment_id;
           
-          console.log('📊 Extracted IDs:', { mediaId, commentId });
-          
-          if (!mediaId || !commentId) {
-            console.log('⚠️  Missing IDs, skipping');
-            continue;
-          }
+          if (!mediaId || !commentId) continue;
 
           const job = {
             id: `${commentId}_${Date.now()}`,
@@ -79,26 +85,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             createdAt: new Date().toISOString(),
           };
 
-          console.log('📤 About to push job:', JSON.stringify(job));
+          console.log('📤 Pushing job:', job.id);
           
-          try {
-            // Use EXACT same method as local test
-            console.log('⏳ Calling redis.lpush...');
-            await redis.lpush('instagram:mentions', JSON.stringify(job));
-            console.log('✅ SUCCESSFULLY PUSHED TO REDIS!');
-          } catch (redisError: any) {
-            console.error('❌ Redis push error:', redisError);
-            console.error('Error message:', redisError?.message);
-            console.error('Error stack:', redisError?.stack);
-          }
+          await pushToRedis(job);
+          
+          console.log('✅ Job pushed successfully!');
         }
       }
       
-      console.log('🏁 All processing complete!');
+      console.log('🏁 Complete!');
     } catch (e: any) {
-      console.error('❌ Outer error:', e);
-      console.error('Error message:', e?.message);
-      console.error('Error stack:', e?.stack);
+      console.error('❌ Error:', e.message, e.stack);
     }
     return;
   }
