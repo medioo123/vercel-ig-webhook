@@ -92,5 +92,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return;
   }
 
+  
   return res.status(405).send('method not allowed');
 }
