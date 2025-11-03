@@ -30,19 +30,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // EVENTS (POST)
   if (req.method === 'POST') {
     console.log('📨 POST event received');
+    console.log('📦 META PAYLOAD:', JSON.stringify(req.body, null, 2));
     
     // ACK immediately
     res.status(200).json({ status: 'ok' });
     
     try {
-      // Initialize Redis with retry DISABLED (fixes hanging issue in Vercel)
+      // Initialize Redis with retry DISABLED
+      console.log('🔧 Creating Redis client...');
       const redis = new Redis({
         url: process.env.UPSTASH_REDIS_REST_URL!,
         token: process.env.UPSTASH_REDIS_REST_TOKEN!,
         retry: {
-          retries: 0, // Disable retries
+          retries: 0,
         },
       });
+      console.log('✅ Redis client created');
 
       const payload = req.body as any;
       
@@ -65,16 +68,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
 
           console.log('📤 Pushing:', job.id);
+          console.log('📦 Job data:', JSON.stringify(job));
           
-          await redis.lpush('instagram:mentions', JSON.stringify(job));
-          
-          console.log('✅ Success!');
+          try {
+            console.log('⏳ Calling lpush...');
+            const result = await redis.lpush('instagram:mentions', JSON.stringify(job));
+            console.log('✅ LPUSH SUCCESS! Result:', result);
+          } catch (lpushErr: any) {
+            console.error('❌ LPUSH ERROR:', lpushErr.message);
+            console.error('Error details:', JSON.stringify(lpushErr, Object.getOwnPropertyNames(lpushErr)));
+          }
         }
       }
       
-      console.log('🏁 Done!');
+      console.log('🏁 All done!');
     } catch (e: any) {
-      console.error('❌ Error:', e.message, e.stack);
+      console.error('❌ OUTER ERROR:', e.message);
+      console.error('Error stack:', e.stack);
     }
     return;
   }
