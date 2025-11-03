@@ -1,5 +1,4 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -8,16 +7,6 @@ function first(v: unknown): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
   return undefined;
-}
-
-// Helper to add timeout to promises
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
-    ),
-  ]);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -32,6 +21,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const challenge = first(req.query['hub.challenge']);
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
+      console.log('✅ Verification success');
       return res.status(200).send(String(challenge));
     }
     return res.status(403).send('verification failed');
@@ -45,7 +35,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     res.status(200).json({ status: 'ok' });
     
     try {
-      // Try with fetch-based approach (more reliable in serverless)
       const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL!;
       const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
 
@@ -72,27 +61,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           console.log('📤 Pushing job:', job.id);
           
           try {
-            // Use direct HTTP API instead of SDK
-            const response = await withTimeout(
-              fetch(`${UPSTASH_URL}/lpush/instagram:mentions/${encodeURIComponent(JSON.stringify(job))}`, {
-                method: 'POST',
-                headers: {
-                  'Authorization': `Bearer ${UPSTASH_TOKEN}`,
-                },
-              }),
-              3000 // 3 second timeout
-            );
+            // Correct Upstash REST API format: POST /lpush/key with body
+            const response = await fetch(`${UPSTASH_URL}/lpush/instagram:mentions`, {
+              method: 'POST',
+              headers: {
+                'Authorization': `Bearer ${UPSTASH_TOKEN}`,
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify([JSON.stringify(job)]),
+            });
 
             if (!response.ok) {
               const text = await response.text();
-              throw new Error(`Redis HTTP API failed: ${response.status} - ${text}`);
+              console.error('❌ Redis API error:', response.status, text);
+              throw new Error(`Redis failed: ${response.status}`);
             }
 
             const result = await response.json();
-            console.log('✅ SUCCESS! Result:', result);
+            console.log('✅ SUCCESS! Queue length:', result.result);
           } catch (pushError: any) {
             console.error('❌ Push failed:', pushError.message);
-            console.error('Stack:', pushError.stack);
           }
         }
       }
