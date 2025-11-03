@@ -13,29 +13,47 @@ async function pushToRedis(job: any): Promise<void> {
   const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL!;
   const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
   
-  // Upstash REST API: POST to /lpush/{key} with JSON body
   const url = `${UPSTASH_URL}/lpush/instagram:mentions`;
   
   console.log('🌐 Calling Upstash API:', url);
+  console.log('🔑 Token length:', UPSTASH_TOKEN.length);
   
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${UPSTASH_TOKEN}`,
-    },
-    body: JSON.stringify([JSON.stringify(job)]), // Array of values to push
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
   
-  console.log('📡 Response status:', response.status);
-  
-  if (!response.ok) {
-    const text = await response.text();
-    console.error('❌ Response error:', text);
-    throw new Error(`Upstash API failed: ${response.status} - ${text}`);
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${UPSTASH_TOKEN}`,
+      },
+      body: JSON.stringify([JSON.stringify(job)]),
+      signal: controller.signal,
+    });
+    
+    clearTimeout(timeoutId);
+    
+    console.log('📡 Response status:', response.status);
+    
+    if (!response.ok) {
+      const text = await response.text();
+      console.error('❌ Response error:', text);
+      throw new Error(`Upstash API failed: ${response.status} - ${text}`);
+    }
+    
+    const result = await response.json();
+    console.log('✅ Upstash response:', result);
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    
+    if (error.name === 'AbortError') {
+      console.error('❌ Request timed out after 5 seconds');
+      throw new Error('Upstash request timeout');
+    }
+    
+    console.error('❌ Fetch error:', error.message);
+    throw error;
   }
-  
-  const result = await response.json();
-  console.log('✅ Upstash response:', result);
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -50,7 +68,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const challenge = first(req.query['hub.challenge']);
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
-      console.log('✅ Verification success');
       return res.status(200).send(String(challenge));
     }
     return res.status(403).send('verification failed');
@@ -58,8 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // EVENTS (POST)
   if (req.method === 'POST') {
-    console.log('📨 POST event received');
-    console.log('📦 Payload:', JSON.stringify(req.body, null, 2));
+    console.log('📨 POST event');
     
     // ACK immediately
     res.status(200).json({ status: 'ok' });
@@ -85,17 +101,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             createdAt: new Date().toISOString(),
           };
 
-          console.log('📤 Pushing job:', job.id);
+          console.log('📤 Pushing:', job.id);
           
           await pushToRedis(job);
           
-          console.log('✅ Job pushed successfully!');
+          console.log('✅ Success!');
         }
       }
       
-      console.log('🏁 Complete!');
+      console.log('🏁 Done!');
     } catch (e: any) {
-      console.error('❌ Error:', e.message, e.stack);
+      console.error('❌ Error:', e.message);
     }
     return;
   }
