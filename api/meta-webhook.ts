@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -31,23 +32,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'POST') {
     console.log('📨 POST event received');
     
+    // LOG THE FULL PAYLOAD FROM META
+    console.log('📦 Full Meta payload:', JSON.stringify(req.body, null, 2));
+    
     // ACK immediately
     res.status(200).json({ status: 'ok' });
     
     try {
-      const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL!;
-      const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
+      // Initialize Redis INSIDE handler (same as local test)
+      console.log('🔧 Initializing Redis client...');
+      const redis = new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL!,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+      });
+      console.log('✅ Redis client created');
 
       const payload = req.body as any;
       
       for (const entry of payload?.entry ?? []) {
+        console.log('📝 Processing entry:', entry);
+        
         for (const change of entry?.changes ?? []) {
-          if (change.field !== 'mentions') continue;
+          console.log('🔔 Processing change:', change);
+          
+          if (change.field !== 'mentions') {
+            console.log('⏭️  Skipping field:', change.field);
+            continue;
+          }
 
           const mediaId = change.value?.media_id;
           const commentId = change.value?.comment_id;
           
-          if (!mediaId || !commentId) continue;
+          console.log('📊 Extracted IDs:', { mediaId, commentId });
+          
+          if (!mediaId || !commentId) {
+            console.log('⚠️  Missing IDs, skipping');
+            continue;
+          }
 
           const job = {
             id: `${commentId}_${Date.now()}`,
@@ -58,40 +79,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             createdAt: new Date().toISOString(),
           };
 
-          console.log('📤 Pushing job:', job.id);
+          console.log('📤 About to push job:', JSON.stringify(job));
           
           try {
-            // Correct Upstash REST API format: POST /lpush/key with body
-            const response = await fetch(`${UPSTASH_URL}/lpush/instagram:mentions`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${UPSTASH_TOKEN}`,
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify([JSON.stringify(job)]),
-            });
-
-            if (!response.ok) {
-              const text = await response.text();
-              console.error('❌ Redis API error:', response.status, text);
-              throw new Error(`Redis failed: ${response.status}`);
-            }
-
-            const result = await response.json();
-            console.log('✅ SUCCESS! Queue length:', result.result);
-          } catch (pushError: any) {
-            console.error('❌ Push failed:', pushError.message);
+            // Use EXACT same method as local test
+            console.log('⏳ Calling redis.lpush...');
+            await redis.lpush('instagram:mentions', JSON.stringify(job));
+            console.log('✅ SUCCESSFULLY PUSHED TO REDIS!');
+          } catch (redisError: any) {
+            console.error('❌ Redis push error:', redisError);
+            console.error('Error message:', redisError?.message);
+            console.error('Error stack:', redisError?.stack);
           }
         }
       }
       
-      console.log('🏁 Done!');
+      console.log('🏁 All processing complete!');
     } catch (e: any) {
-      console.error('❌ Error:', e.message);
+      console.error('❌ Outer error:', e);
+      console.error('Error message:', e?.message);
+      console.error('Error stack:', e?.stack);
     }
     return;
   }
 
-  
   return res.status(405).send('method not allowed');
 }
