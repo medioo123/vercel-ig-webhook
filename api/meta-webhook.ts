@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { kv } from '@vercel/kv';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -21,6 +22,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const challenge = first(req.query['hub.challenge']);
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
+      console.log('✅ Verification success');
       return res.status(200).send(String(challenge));
     }
     return res.status(403).send('verification failed');
@@ -57,32 +59,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log('📤 Pushing:', job.id);
         
         try {
-          // Use pure fetch - no SDK
-          const upstashUrl = process.env.UPSTASH_REDIS_REST_URL!;
-          const upstashToken = process.env.UPSTASH_REDIS_REST_TOKEN!;
-          
-          console.log('🌐 Calling Upstash REST API...');
-          
-          // Upstash REST API: POST https://xxx.upstash.io/lpush/key
-          // Body: JSON array of values to push
-          const response = await fetch(`${upstashUrl}/lpush/instagram:mentions`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${upstashToken}`,
-            },
-            body: JSON.stringify([JSON.stringify(job)]),
-          });
-          
-          console.log('📡 Response status:', response.status);
-          
-          if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ API Error:', errorText);
-            throw new Error(`Upstash failed: ${response.status}`);
-          }
-          
-          const result = await response.json();
-          console.log('✅ SUCCESS! Result:', result);
+          // @vercel/kv automatically uses KV_REST_API_URL and KV_REST_API_TOKEN
+          const result = await kv.lpush('instagram:mentions', JSON.stringify(job));
+          console.log('✅ SUCCESS! Queue length:', result);
         } catch (err: any) {
           console.error('❌ Error:', err.message);
           console.error('Stack:', err.stack);
