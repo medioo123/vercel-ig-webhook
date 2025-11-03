@@ -1,0 +1,25 @@
+{
+  "name": "vercel-ig-webhook",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/medioo123/vercel-ig-webhook.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/medioo123/vercel-ig-webhook/issues"
+  },
+  "homepage": "https://github.com/medioo123/vercel-ig-webhook#readme",
+  "dependencies": {
+    "@upstash/redis": "^1.35.6",
+    "@vercel/node": "^5.5.3"
+  }
+}
