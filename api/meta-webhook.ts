@@ -10,6 +10,17 @@ function first(v: unknown): string | undefined {
   return undefined;
 }
 
+// Wrap with timeout
+async function lpushWithTimeout(key: string, value: string) {
+  const timeoutPromise = new Promise((_, reject) => 
+    setTimeout(() => reject(new Error('KV lpush timed out after 3 seconds')), 3000)
+  );
+  
+  const lpushPromise = kv.lpush(key, value);
+  
+  return Promise.race([lpushPromise, timeoutPromise]);
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   console.log('🚀 WEBHOOK HIT:', { method: req.method });
 
@@ -22,7 +33,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const challenge = first(req.query['hub.challenge']);
 
     if (mode === 'subscribe' && token === VERIFY_TOKEN && challenge) {
-      console.log('✅ Verification success');
       return res.status(200).send(String(challenge));
     }
     return res.status(403).send('verification failed');
@@ -30,8 +40,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // EVENTS (POST)
   if (req.method === 'POST') {
-    console.log('📨 POST event received');
-    console.log('📦 META PAYLOAD:', JSON.stringify(req.body, null, 2));
+    console.log('📨 POST event');
+    console.log('📦 Payload:', JSON.stringify(req.body));
     
     // ACK immediately
     res.status(200).json({ status: 'ok' });
@@ -56,20 +66,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           createdAt: new Date().toISOString(),
         };
 
-        console.log('📤 Pushing:', job.id);
+        console.log('📤 Push:', job.id);
+        console.log('🔑 Has URL:', !!process.env.KV_REST_API_URL);
+        console.log('🔑 Has Token:', !!process.env.KV_REST_API_TOKEN);
+        
+        const jobString = JSON.stringify(job);
+        console.log('📝 Key:', 'instagram:mentions');
+        console.log('📝 Value:', jobString);
+        console.log('📝 Value length:', jobString.length);
         
         try {
-          // @vercel/kv automatically uses KV_REST_API_URL and KV_REST_API_TOKEN
-          const result = await kv.lpush('instagram:mentions', JSON.stringify(job));
-          console.log('✅ SUCCESS! Queue length:', result);
+          console.log('⏳ Calling kv.lpush...');
+          const result = await lpushWithTimeout('instagram:mentions', jobString);
+          console.log('✅ SUCCESS!', result);
         } catch (err: any) {
-          console.error('❌ Error:', err.message);
-          console.error('Stack:', err.stack);
+          console.error('❌ ERROR:', err.message);
         }
       }
     }
     
-    console.log('🏁 Done!');
+    console.log('🏁 Done');
     return;
   }
 
