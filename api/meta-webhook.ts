@@ -33,6 +33,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     console.log('📨 POST event received');
     console.log('📦 META PAYLOAD:', JSON.stringify(req.body, null, 2));
     
+    // LOG ENVIRONMENT VARIABLES
+    console.log('🔍 KV_REST_API_URL:', process.env.KV_REST_API_URL);
+    console.log('🔍 KV_REST_API_TOKEN exists:', !!process.env.KV_REST_API_TOKEN);
+    console.log('🔍 KV_REST_API_TOKEN length:', process.env.KV_REST_API_TOKEN?.length);
+    
     try {
       const payload = req.body as any;
       
@@ -55,21 +60,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           };
 
           console.log('📤 Pushing:', job.id);
+          console.log('📝 Job data:', JSON.stringify(job));
           
-          // DO THE PUSH BEFORE RESPONDING
+          // Push to KV
           const result = await kv.lpush('instagram:mentions', JSON.stringify(job));
           
-          console.log('✅ SUCCESS! Queue length:', result);
+          console.log('✅ SUCCESS! Result:', result);
+          
+          // Verify it's there
+          const verify = await kv.lrange('instagram:mentions', 0, 0);
+          console.log('🔍 Verify - last item in queue:', verify);
         }
       }
       
       console.log('🏁 Done - now sending response');
       
-      // NOW send the 200 response
       return res.status(200).json({ status: 'ok' });
       
     } catch (e: any) {
       console.error('❌ Error:', e.message);
+      console.error('❌ Stack:', e.stack);
       return res.status(200).json({ status: 'error', message: e.message });
     }
   }
