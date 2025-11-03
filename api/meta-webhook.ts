@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { Redis } from '@upstash/redis';
 
 const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || '';
 const IG_USERNAME  = (process.env.IG_USERNAME || '').toLowerCase();
@@ -7,53 +8,6 @@ function first(v: unknown): string | undefined {
   if (typeof v === 'string') return v;
   if (Array.isArray(v) && typeof v[0] === 'string') return v[0];
   return undefined;
-}
-
-async function pushToRedis(job: any): Promise<void> {
-  const UPSTASH_URL = process.env.UPSTASH_REDIS_REST_URL!;
-  const UPSTASH_TOKEN = process.env.UPSTASH_REDIS_REST_TOKEN!;
-  
-  const url = `${UPSTASH_URL}/lpush/instagram:mentions`;
-  
-  console.log('🌐 Calling Upstash API:', url);
-  console.log('🔑 Token length:', UPSTASH_TOKEN.length);
-  
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
-  
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${UPSTASH_TOKEN}`,
-      },
-      body: JSON.stringify([JSON.stringify(job)]),
-      signal: controller.signal,
-    });
-    
-    clearTimeout(timeoutId);
-    
-    console.log('📡 Response status:', response.status);
-    
-    if (!response.ok) {
-      const text = await response.text();
-      console.error('❌ Response error:', text);
-      throw new Error(`Upstash API failed: ${response.status} - ${text}`);
-    }
-    
-    const result = await response.json();
-    console.log('✅ Upstash response:', result);
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    
-    if (error.name === 'AbortError') {
-      console.error('❌ Request timed out after 5 seconds');
-      throw new Error('Upstash request timeout');
-    }
-    
-    console.error('❌ Fetch error:', error.message);
-    throw error;
-  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -75,12 +29,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // EVENTS (POST)
   if (req.method === 'POST') {
-    console.log('📨 POST event');
+    console.log('📨 POST event received');
     
     // ACK immediately
     res.status(200).json({ status: 'ok' });
     
     try {
+      // Initialize Redis with retry DISABLED (fixes hanging issue in Vercel)
+      const redis = new Redis({
+        url: process.env.UPSTASH_REDIS_REST_URL!,
+        token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+        retry: {
+          retries: 0, // Disable retries
+        },
+      });
+
       const payload = req.body as any;
       
       for (const entry of payload?.entry ?? []) {
@@ -103,7 +66,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           console.log('📤 Pushing:', job.id);
           
-          await pushToRedis(job);
+          await redis.lpush('instagram:mentions', JSON.stringify(job));
           
           console.log('✅ Success!');
         }
@@ -111,7 +74,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       
       console.log('🏁 Done!');
     } catch (e: any) {
-      console.error('❌ Error:', e.message);
+      console.error('❌ Error:', e.message, e.stack);
     }
     return;
   }
